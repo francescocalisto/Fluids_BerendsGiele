@@ -70,8 +70,12 @@ def test_A(n_max=7, seed=0):
     print("  Σ_σ J_abelian(σ)  =  K_P · (n−1)! / 2^{n−1}")
     print("=" * 66)
 
-    rng    = np.random.RandomState(seed)
-    passed = True
+    rng      = np.random.RandomState(seed)
+    passed   = True
+    ns_A     = []
+    vals_bg  = []
+    vals_ch  = []
+    rel_errs = []
 
     for n in range(2, n_max + 1):
         momenta = rng.randn(n, 2)          # generic random momenta
@@ -91,12 +95,17 @@ def test_A(n_max=7, seed=0):
         good     = rel_err < 1e-9
         passed   = passed and good
 
+        ns_A.append(n)
+        vals_bg.append(float(np.linalg.norm(total)))
+        vals_ch.append(float(norm_e))
+        rel_errs.append(float(rel_err))
+
         print(f"  n={n:2d}  |BG sum| = {np.linalg.norm(total):9.4e}"
               f"  |formula| = {norm_e:9.4e}"
               f"  rel_err = {rel_err:.1e}  {status(good)}")
 
     print()
-    return passed
+    return passed, ns_A, vals_bg, vals_ch, rel_errs
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -120,9 +129,11 @@ def test_B(n_trials=40, seed=1):
     print("  J[0,1] = (k₁×k₂)(ε₁+ε₂) / (2 k₁·k₂)")
     print("=" * 66)
 
-    rng     = np.random.RandomState(seed)
-    max_err = 0.0
-    passed  = True
+    rng      = np.random.RandomState(seed)
+    max_err  = 0.0
+    passed   = True
+    trial_ids = []
+    b_rel_errs = []
 
     for trial in range(n_trials):
         k1 = rng.randn(2);  k2 = rng.randn(2)
@@ -139,13 +150,15 @@ def test_B(n_trials=40, seed=1):
         rel_err  = (np.linalg.norm(computed - expected)
                     / (np.linalg.norm(expected) + 1e-300))
         max_err  = max(max_err, rel_err)
+        trial_ids.append(trial)
+        b_rel_errs.append(float(rel_err))
         if rel_err > 1e-12:
             passed = False
             print(f"  trial {trial:3d}: FAIL  rel_err = {rel_err:.2e}")
 
     print(f"  {n_trials} random trials,  max rel_err = {max_err:.2e}  {status(passed)}")
     print()
-    return passed
+    return passed, trial_ids, b_rel_errs
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -175,6 +188,8 @@ def test_C(n_max=40, seed=2):
 
     max_ratio = 0.0
     passed    = True
+    ns_C      = []
+    c_ratios  = []
 
     print(f"  {'n':>4}   {'|u_∥ / u_⊥|':>13}")
     print(f"  {'-'*22}")
@@ -192,6 +207,8 @@ def test_C(n_max=40, seed=2):
         u_perp = abs(float(np.dot(u, KPperp)))
         ratio  = u_par / (u_perp + 1e-300)
         max_ratio = max(max_ratio, ratio)
+        ns_C.append(n)
+        c_ratios.append(float(ratio))
         bad    = ratio > 1e-4
         if bad:
             passed = False
@@ -200,7 +217,7 @@ def test_C(n_max=40, seed=2):
 
     print(f"\n  Max |u_∥/u_⊥| over n=2..{n_max}: {max_ratio:.2e}  {status(passed)}")
     print()
-    return passed
+    return passed, ns_C, c_ratios
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -266,49 +283,71 @@ def test_D(n_max=100, seed=42):
 
 # ── Plots ─────────────────────────────────────────────────────────────────────
 
-def make_plots(ns, log_long, log_trans, fname="validate_plots.png", seed=0):
+def make_plots(ns_A, vals_bg, vals_ch, a_rel_errs,
+               trial_ids, b_rel_errs,
+               ns_C, c_ratios,
+               ns_D, log_long, log_trans,
+               fname="validate_plots.png"):
     try:
         import matplotlib.pyplot as plt
     except ImportError:
         print("  (matplotlib not available — skipping plots)")
         return
 
-    fig, axes = plt.subplots(1, 2, figsize=(13, 5))
+    fig, axes = plt.subplots(2, 2, figsize=(13, 10))
 
-    # ── left panel: Cole-Hopf formula check (Test A) ──────────────────────
-    ax = axes[0]
-    rng      = np.random.RandomState(seed)
-    ns_A     = list(range(2, 8))
-    vals_bg  = []
-    vals_ch  = []
-    for n in ns_A:
-        momenta = rng.randn(n, 2)
-        K_P     = momenta.sum(axis=0)
-        total   = np.zeros(2)
-        for perm in permutations(range(n)):
-            mom_p = momenta[list(perm)]
-            J, _, _ = bg_abelian(n, mom_p, mom_p.copy())
-            total += J[0, n-1]
-        expected = K_P * factorial(n - 1) / 2**(n - 1)
-        vals_bg.append(float(np.linalg.norm(total)))
-        vals_ch.append(float(np.linalg.norm(expected)))
-
-    ax.plot(ns_A, vals_bg, "o-",  lw=2, ms=8, color="steelblue",
-            label=r"$\sum_\sigma\,J_{\rm abelian}(\sigma)$  [BG sum]", zorder=5)
-    ax.plot(ns_A, vals_ch, "s--", lw=2, ms=7, color="tomato", alpha=0.85,
-            label=r"$|K_P|\,(n{-}1)!/2^{n-1}$  [Cole–Hopf]", zorder=4)
+    # ── Test A: BG sum vs Cole–Hopf magnitudes + relative error ──────────
+    ax = axes[0, 0]
+    ax.semilogy(ns_A, vals_bg, "o-",  lw=2, ms=8, color="steelblue",
+                label=r"$\sum_\sigma J_{\rm abelian}(\sigma)$  [BG sum]", zorder=5)
+    ax.semilogy(ns_A, vals_ch, "s--", lw=2, ms=7, color="tomato", alpha=0.85,
+                label=r"$(n{-}1)!\,|K_P|/2^{n-1}$  [Cole–Hopf]", zorder=4)
     ax.set_xlabel("n (number of legs)", fontsize=11)
     ax.set_ylabel(r"$|\,\Sigma\,J\,|$", fontsize=11)
     ax.set_title("Test A: Cole–Hopf formula\n"
                  r"(abelian BG, longitudinal $\varepsilon=k$)", fontsize=10)
     ax.legend(fontsize=9)
-    ax.grid(True, alpha=0.3)
+    ax.grid(True, alpha=0.3, which="both")
 
-    # ── right panel: longitudinal plateau (Test D) ────────────────────────
-    ax = axes[1]
-    ax.plot(ns, log_long,  "-", lw=2, color="steelblue",
+    # inset: relative errors on a second y-axis
+    ax2 = ax.twinx()
+    ax2.semilogy(ns_A, a_rel_errs, "^:", lw=1.2, ms=7, color="purple",
+                 alpha=0.7, label="rel. error")
+    ax2.set_ylabel("relative error", fontsize=10, color="purple")
+    ax2.tick_params(axis="y", labelcolor="purple")
+    ax2.legend(fontsize=9, loc="lower right")
+
+    # ── Test B: per-trial relative errors ────────────────────────────────
+    ax = axes[0, 1]
+    ax.semilogy(trial_ids, b_rel_errs, "o", ms=5, color="steelblue",
+                alpha=0.7, label="rel. error per trial")
+    threshold = 1e-12
+    ax.axhline(threshold, color="tomato", lw=1.5, ls="--",
+               label=f"pass threshold ({threshold:.0e})")
+    ax.set_xlabel("trial index", fontsize=11)
+    ax.set_ylabel("relative error", fontsize=11)
+    ax.set_title("Test B: $n=2$ analytic formula\n"
+                 r"(non-abelian, transverse $\varepsilon=k^\perp$)", fontsize=10)
+    ax.legend(fontsize=9)
+    ax.grid(True, alpha=0.3, which="both")
+
+    # ── Test C: transversality ratio |u_∥/u_⊥| vs n ──────────────────────
+    ax = axes[1, 0]
+    ax.semilogy(ns_C, c_ratios, "-", lw=1.8, color="steelblue",
+                label=r"$|u_\parallel / u_\perp|$")
+    ax.axhline(1e-4, color="tomato", lw=1.5, ls="--", label="threshold $10^{-4}$")
+    ax.set_xlabel("n (number of legs)", fontsize=11)
+    ax.set_ylabel(r"$|u_\parallel / u_\perp|$", fontsize=11)
+    ax.set_title("Test C: Transversality preservation\n"
+                 r"(non-abelian, $\varepsilon=k^\perp$)", fontsize=10)
+    ax.legend(fontsize=9)
+    ax.grid(True, alpha=0.3, which="both")
+
+    # ── Test D: longitudinal plateau vs transverse growth ────────────────
+    ax = axes[1, 1]
+    ax.plot(ns_D, log_long,  "-", lw=2, color="steelblue",
             label="Longitudinal  (Cole–Hopf integrable)")
-    ax.plot(ns, log_trans, "-", lw=2, color="tomato",
+    ax.plot(ns_D, log_trans, "-", lw=2, color="tomato",
             label="Transverse  (non-integrable)")
     ax.axhline(0, color="k", lw=0.8, ls="--", alpha=0.4)
     ax.set_xlabel("n (number of legs)", fontsize=11)
@@ -334,14 +373,17 @@ if __name__ == "__main__":
                         help="max n for Test D  (default: 100)")
     args = parser.parse_args()
 
-    ok_A = test_A()
-    ok_B = test_B()
-    ok_C = test_C()
-    ok_D, ns, log_long, log_trans = test_D(n_max=args.n_max)
+    ok_A, ns_A, vals_bg, vals_ch, a_rel_errs = test_A()
+    ok_B, trial_ids, b_rel_errs              = test_B()
+    ok_C, ns_C, c_ratios                     = test_C()
+    ok_D, ns_D, log_long, log_trans          = test_D(n_max=args.n_max)
 
     if args.plot:
         print("Saving plots …")
-        make_plots(ns, log_long, log_trans)
+        make_plots(ns_A, vals_bg, vals_ch, a_rel_errs,
+                   trial_ids, b_rel_errs,
+                   ns_C, c_ratios,
+                   ns_D, log_long, log_trans)
 
     print("=" * 66)
     print("SUMMARY")
